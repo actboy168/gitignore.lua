@@ -1,0 +1,18 @@
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        luaVersion: ['5.5', '5.4', '5.3', '5.2']
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - uses: actboy168/setup-lua@master
+      with:
+        luaVersion: ${{ matrix.luaVersion }}
+    - run: lua test.lua
+    - run: lua test.lua -c

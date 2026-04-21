@@ -1,0 +1,3 @@
+[submodule "deps/ltest"]
+	path = deps/ltest
+	url = https://github.com/actboy168/ltest.git
