@@ -28,7 +28,7 @@ local tmpdir
 local git_initialized = false
 
 local function rmdir(path)
-    if package.config:sub(1,1) == "\\" then
+    if package.config:sub(1, 1) == "\\" then
         os.execute('rd /s /q "' .. path .. '" 2>nul')
     else
         os.execute('rm -rf "' .. path .. '"')
@@ -36,7 +36,7 @@ local function rmdir(path)
 end
 
 local function mkdirs(path)
-    if package.config:sub(1,1) == "\\" then
+    if package.config:sub(1, 1) == "\\" then
         os.execute('mkdir "' .. path .. '" 2>nul')
     else
         os.execute('mkdir -p "' .. path .. '"')
@@ -64,7 +64,7 @@ end
 local function init_git_repo()
     if git_initialized then return end
     git_initialized = true
-    if package.config:sub(1,1) == "\\" then
+    if package.config:sub(1, 1) == "\\" then
         local temp = os.getenv("TEMP") or "C:\\Temp"
         tmpdir = temp .. "\\gitignore_test_" .. tostring(math.random(100000, 999999))
     else
@@ -170,7 +170,7 @@ end
 -- Basic hierarchy: root excludes *.o, subdirectory re-includes debug.o
 T["test_merge_basic"] = function(self)
     local matcher = gitignore.merge({
-        { patterns = { "*.o" }, prefix = "" },
+        { patterns = { "*.o" },      prefix = "" },
         { patterns = { "!debug.o" }, prefix = "src/" },
     })
     lt.assertTrue(matcher:match("foo.o", false))
@@ -196,7 +196,7 @@ end
 -- Depth sorting: deeper .gitignore overrides parent
 T["test_merge_depth_priority"] = function(self)
     local matcher = gitignore.merge({
-        { patterns = { "*.log" }, prefix = "src/" },
+        { patterns = { "*.log" },          prefix = "src/" },
         { patterns = { "!important.log" }, prefix = "" },
     })
     -- Entry with prefix="" has 0 slashes, prefix="src/" has 1
@@ -209,9 +209,9 @@ end
 -- Three levels of hierarchy
 T["test_merge_three_levels"] = function(self)
     local matcher = gitignore.merge({
-        { patterns = { "*.tmp" }, prefix = "" },
+        { patterns = { "*.tmp" },     prefix = "" },
         { patterns = { "!keep.tmp" }, prefix = "src/" },
-        { patterns = { "keep.tmp" }, prefix = "src/core/" },
+        { patterns = { "keep.tmp" },  prefix = "src/core/" },
     })
     lt.assertTrue(matcher:match("foo.tmp", false))
     lt.assertFalse(matcher:match("src/keep.tmp", false))
@@ -253,7 +253,7 @@ T["test_merge_with_path"] = function(self)
     write_file(tmpfile, "*.log\n!important.log\n")
     local matcher = gitignore.merge({
         { patterns = { "*.tmp" }, prefix = "" },
-        { path = tmpfile, prefix = "src/" },
+        { path = tmpfile,         prefix = "src/" },
     })
     lt.assertTrue(matcher:match("foo.tmp", false))
     lt.assertTrue(matcher:match("src/debug.log", false))
@@ -282,11 +282,51 @@ T["test_merge_empty_prefix"] = function(self)
     lt.assertFalse(matcher:match("keep.o", false))
 end
 
--- Cleanup on exit
-local orig_exit = os.exit
-os.exit = function(code, close)
-    cleanup_git_repo()
-    orig_exit(code, close)
+-- matcher:push / matcher:pop
+T["test_push_pop_basic"] = function(self)
+    local matcher = gitignore.new({ "*.log" })
+    lt.assertTrue(matcher:match("error.log", false))
+    lt.assertFalse(matcher:match("error.txt", false))
+    matcher:push({ "*.txt" })
+    lt.assertTrue(matcher:match("error.txt", false))
+    matcher:pop()
+    lt.assertFalse(matcher:match("error.txt", false))
+    lt.assertTrue(matcher:match("error.log", false))
 end
 
-os.exit(lt.run(), true)
+T["test_push_pop_with_prefix"] = function(self)
+    local matcher = gitignore.new({ "*.o" })
+    matcher:push({ "!debug.o" }, "src/")
+    lt.assertFalse(matcher:match("src/debug.o", false))
+    lt.assertTrue(matcher:match("debug.o", false))
+    matcher:pop()
+    lt.assertTrue(matcher:match("src/debug.o", false))
+    lt.assertTrue(matcher:match("debug.o", false))
+end
+
+T["test_push_pop_nested"] = function(self)
+    local matcher = gitignore.new({ "*.tmp" })
+    lt.assertTrue(matcher:match("a.tmp", false))
+    lt.assertTrue(matcher:match("src/b.tmp", false))
+    lt.assertTrue(matcher:match("src/core/c.tmp", false))
+    -- push src/
+    matcher:push({ "!keep.tmp" }, "src/")
+    lt.assertFalse(matcher:match("src/keep.tmp", false))
+    lt.assertTrue(matcher:match("keep.tmp", false))
+    lt.assertFalse(matcher:match("src/core/keep.tmp", false))
+    -- push src/core/
+    matcher:push({ "keep.tmp" }, "src/core/")
+    lt.assertTrue(matcher:match("src/core/keep.tmp", false))
+    -- pop src/core/
+    matcher:pop()
+    lt.assertFalse(matcher:match("src/core/keep.tmp", false))
+    -- pop src/
+    matcher:pop()
+    lt.assertTrue(matcher:match("src/keep.tmp", false))
+    lt.assertTrue(matcher:match("a.tmp", false))
+end
+
+
+local exitcode = lt.run()
+cleanup_git_repo()
+os.exit(exitcode, true)

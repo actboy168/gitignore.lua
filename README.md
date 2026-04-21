@@ -48,6 +48,8 @@ matcher:match("foo", false)          -- true
 | `gitignore.new(patterns, opts)` | 从模式列表创建匹配器 |
 | `gitignore.merge(entries, opts)` | 从多层 .gitignore 创建匹配器 |
 | `matcher:match(path, is_dir)` | 判断路径是否被忽略 |
+| `matcher:push(lines, prefix)` | 动态追加规则（栈式） |
+| `matcher:pop()` | 还原上次 push 的规则 |
 
 **选项：**
 

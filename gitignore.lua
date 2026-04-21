@@ -416,6 +416,20 @@ end
 -- Matcher object
 ---------------------------------------------------------------------------
 
+local function evaluate_patterns(patterns, path, basename, is_dir, ignore_case)
+    local result = false
+    for _, pat in ipairs(patterns) do
+        if pat.match_fn(path, basename, is_dir, ignore_case) then
+            if pat.negate then
+                result = false
+            else
+                result = true
+            end
+        end
+    end
+    return result
+end
+
 local matcher_mt = {}
 matcher_mt.__index = matcher_mt
 
@@ -441,7 +455,8 @@ function matcher_mt:match(path, is_dir)
             local parent = path:sub(1, slash - 1)
             local cached = cache[parent]
             if cached == nil then
-                cached = self:_is_ignored_no_parent_check(parent, true)
+                local parent_basename = parent:match("([^/]+)$") or parent
+                cached = evaluate_patterns(self.patterns, parent, parent_basename, true, self.ignore_case)
                 cache[parent] = cached
             end
             if cached then
@@ -456,37 +471,35 @@ function matcher_mt:match(path, is_dir)
         return true
     end
 
-    local result = false
-    local ignore_case = self.ignore_case
-
-    for _, pat in ipairs(self.patterns) do
-        if pat.match_fn(path, basename, is_dir, ignore_case) then
-            if pat.negate then
-                result = false
-            else
-                result = true
-            end
-        end
-    end
-
-    return result
+    return evaluate_patterns(self.patterns, path, basename, is_dir, self.ignore_case)
 end
 
-function matcher_mt:_is_ignored_no_parent_check(path, is_dir)
-    local basename = path:match("([^/]+)$") or path
-
-    local result = false
-    local ignore_case = self.ignore_case
-    for _, pat in ipairs(self.patterns) do
-        if pat.match_fn(path, basename, is_dir, ignore_case) then
-            if pat.negate then
-                result = false
-            else
-                result = true
-            end
+function matcher_mt:push(lines, prefix)
+    local stack = self._push_stack
+    if not stack then
+        stack = {}
+        self._push_stack = stack
+    end
+    stack[#stack + 1] = #self.patterns
+    prefix = prefix or ""
+    for _, line in ipairs(lines) do
+        local pat = parse_line(line, prefix)
+        if pat ~= nil and pat.type ~= "never" then
+            pat.match_fn = build_match_fn(pat.tokens, pat.anchored, pat.dir_only)
+            self.patterns[#self.patterns + 1] = pat
         end
     end
-    return result
+    self._parent_cache = {}
+end
+
+function matcher_mt:pop()
+    local stack = self._push_stack
+    local save = stack[#stack]
+    stack[#stack] = nil
+    while #self.patterns > save do
+        self.patterns[#self.patterns] = nil
+    end
+    self._parent_cache = {}
 end
 
 ---------------------------------------------------------------------------
@@ -534,8 +547,8 @@ function m.merge(entries, opts)
         return count_slashes(a.prefix or "") < count_slashes(b.prefix or "")
     end)
 
-    -- Collect all patterns with prefix applied
-    local all_patterns = {}
+    local self = m.new({}, opts)
+
     for _, entry in ipairs(sorted) do
         local prefix = entry.prefix or ""
         local lines = entry.patterns or {}
@@ -557,20 +570,8 @@ function m.merge(entries, opts)
             end
         end
 
-        for _, line in ipairs(lines) do
-            local pat = parse_line(line, prefix)
-            if pat ~= nil and pat.type ~= "never" then
-                pat.match_fn = build_match_fn(pat.tokens, pat.anchored, pat.dir_only)
-                all_patterns[#all_patterns + 1] = pat
-            end
-        end
+        self:push(lines, prefix)
     end
-
-    local self = setmetatable({
-        patterns = all_patterns,
-        ignore_case = opts.ignore_case or false,
-        _parent_cache = {},
-    }, matcher_mt)
 
     return self
 end

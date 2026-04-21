@@ -101,6 +101,31 @@ matcher:match("build/output", false) -- true  （父目录 build 被排除）
 matcher:match("src/main.c", false)   -- false （不匹配任何规则）
 ```
 
+### matcher:push(lines, prefix) / matcher:pop()
+
+动态追加和还原规则，用于遍历目录树时按需加载子目录的 `.gitignore`。`push` 和 `pop` 必须配对使用（栈式）。
+
+**参数（push）：**
+
+- `lines` (`table`): `.gitignore` 模式字符串列表
+- `prefix` (`string|nil`): 路径前缀，同 `gitignore.merge` 中的 `prefix` 字段，默认 `""`
+
+**示例：**
+
+```lua
+local matcher = gitignore.new({ "*.o" })
+matcher:match("src/debug.o", false)   -- true
+
+-- 进入 src/ 目录，追加该目录的 .gitignore 规则
+matcher:push({ "!debug.o" }, "src/")
+matcher:match("src/debug.o", false)   -- false（src/ 下的取反生效）
+matcher:match("debug.o", false)       -- true （根目录下仍被忽略）
+
+-- 离开 src/ 目录，还原规则
+matcher:pop()
+matcher:match("src/debug.o", false)   -- true（还原后取反规则不再生效）
+```
+
 ## 匹配规则
 
 详细规则说明见 [doc/spec.md](spec.md)。以下为简要总结：
