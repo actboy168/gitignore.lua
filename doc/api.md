@@ -38,28 +38,6 @@ local matcher = gitignore.new({
 local matcher_ci = gitignore.new({ "Foo" }, { ignore_case = true })
 ```
 
-### gitignore.load(path, opts)
-
-从 `.gitignore` 文件创建匹配器。
-
-**参数：**
-
-- `path` (`string`): `.gitignore` 文件路径
-- `opts` (`table|nil`): 选项表，同 `gitignore.new`
-
-**返回：**
-
-- 匹配器对象 (`matcher`)，文件不存在时返回 `nil`
-
-**示例：**
-
-```lua
-local matcher = gitignore.load(".gitignore")
-if matcher then
-    -- 使用 matcher
-end
-```
-
 ### gitignore.merge(entries, opts)
 
 从多层 `.gitignore` 创建匹配器，支持层级优先级。与 git 的行为一致：更深层目录的 `.gitignore` 优先级更高。

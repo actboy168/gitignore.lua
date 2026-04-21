@@ -1,12 +1,17 @@
 -- Test entry point
--- Usage: luamake lua test.lua                          (ltest only)
---        luamake lua test.lua -c                       (ltest + coverage)
---        GITIGNORE_TEST_GIT=1 luamake lua test.lua     (ltest + git comparison)
+-- Usage: luamake lua test.lua                     (ltest only)
+--        luamake lua test.lua -c                    (ltest + coverage)
+--        luamake lua test.lua -g                    (ltest + git comparison)
 
 package.path = "./?.lua;./deps/ltest/?.lua;" .. package.path
 
--- Check for GIT env var before ltest parses args
-local check_git = (os.getenv("GITIGNORE_TEST_GIT") == "1")
+-- Parse -g flag before ltest processes args
+local check_git = false
+for _, arg in ipairs(arg or {}) do
+    if arg == "-g" then
+        check_git = true
+    end
+end
 
 local lt = require "ltest"
 local gitignore = require "gitignore"
@@ -156,22 +161,6 @@ for ci, tc in ipairs(cases) do
             end
         end
     end
-end
-
--- Coverage: test m.load (reads patterns from file)
-T["test_load_from_file"] = function(self)
-    local tmpfile = os.tmpname()
-    write_file(tmpfile, "*.log\n!important.log\n")
-    local matcher = gitignore.load(tmpfile, {})
-    lt.assertTrue(matcher:match("debug.log", false))
-    lt.assertFalse(matcher:match("important.log", false))
-    os.remove(tmpfile)
-end
-
--- Coverage: m.load non-existent file
-T["test_load_nonexistent"] = function(self)
-    local matcher = gitignore.load("/nonexistent/path/.gitignore", {})
-    lt.assertIsNil(matcher)
 end
 
 ---------------------------------------------------------------------------

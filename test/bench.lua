@@ -117,7 +117,7 @@ bench("match *.O ignore_case (hit)", function()
     m8:match("foo.o", false)
 end)
 
--- load
+-- merge (from file)
 local tmpfile = os.tmpname()
 local f = io.open(tmpfile, "w")
 for i = 1, 100 do
@@ -126,8 +126,8 @@ end
 f:write("*.o\n")
 f:close()
 
-bench("load(101 patterns from file)", function()
-    gitignore.load(tmpfile, {})
+bench("merge(101 patterns from file)", function()
+    gitignore.merge({ { path = tmpfile, prefix = "" } })
 end)
 
 os.remove(tmpfile)

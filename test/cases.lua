@@ -687,5 +687,4 @@ return {
     },
 
     -- 覆盖 line 373-375: bracket ignore_case 原始大小写 chars 检查
-    -- 覆盖 m.load: 从文件加载 gitignore（由 test.lua 单独测试）
 }

@@ -512,17 +512,6 @@ function m.new(patterns, opts)
     return self
 end
 
-function m.load(path, opts)
-    local f = io.open(path, "r")
-    if not f then return nil end
-    local lines = {}
-    for line in f:lines() do
-        lines[#lines + 1] = line
-    end
-    f:close()
-    return m.new(lines, opts)
-end
-
 ---------------------------------------------------------------------------
 -- Hierarchical .gitignore merging
 ---------------------------------------------------------------------------

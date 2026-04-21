@@ -24,7 +24,9 @@ matcher:match("build", true)         -- true （目录模式）
 matcher:match("src/main.c", false)   -- false
 
 -- 从 .gitignore 文件创建
-local matcher = gitignore.load(".gitignore")
+local matcher = gitignore.merge({
+    { path = ".gitignore", prefix = "" },
+})
 
 -- 多层 .gitignore 合并（深层优先）
 local matcher = gitignore.merge({
@@ -44,7 +46,6 @@ matcher:match("foo", false)          -- true
 | API | 说明 |
 |-----|------|
 | `gitignore.new(patterns, opts)` | 从模式列表创建匹配器 |
-| `gitignore.load(path, opts)` | 从 .gitignore 文件创建匹配器 |
 | `gitignore.merge(entries, opts)` | 从多层 .gitignore 创建匹配器 |
 | `matcher:match(path, is_dir)` | 判断路径是否被忽略 |
 
@@ -57,7 +58,7 @@ matcher:match("foo", false)          -- true
 ```bash
 luamake lua test.lua                        # 单元测试
 luamake lua test.lua -c                     # 单元测试 + 覆盖率
-GITIGNORE_TEST_GIT=1 luamake lua test.lua   # 单元测试 + git 对比
+luamake lua test.lua -g                    # 单元测试 + git 对比
 ```
 
 ## 许可证
