@@ -163,125 +163,6 @@ for ci, tc in ipairs(cases) do
     end
 end
 
----------------------------------------------------------------------------
--- Hierarchical .gitignore merge tests
----------------------------------------------------------------------------
-
--- Basic hierarchy: root excludes *.o, subdirectory re-includes debug.o
-T["test_merge_basic"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "*.o" },      prefix = "" },
-        { patterns = { "!debug.o" }, prefix = "src/" },
-    })
-    lt.assertTrue(matcher:match("foo.o", false))
-    lt.assertTrue(matcher:match("src/foo.o", false))
-    lt.assertFalse(matcher:match("src/debug.o", false))
-end
-
--- Anchored pattern with prefix: /foo in subdirectory only matches under that subdir
-T["test_merge_anchored_prefix"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "/foo" }, prefix = "" },
-        { patterns = { "/bar" }, prefix = "src/" },
-    })
-    -- Root /foo matches foo at root only
-    lt.assertTrue(matcher:match("foo", false))
-    lt.assertFalse(matcher:match("a/foo", false))
-    -- src/'s /bar becomes src/bar — matches src/bar only
-    lt.assertTrue(matcher:match("src/bar", false))
-    lt.assertFalse(matcher:match("bar", false))
-    lt.assertFalse(matcher:match("other/bar", false))
-end
-
--- Depth sorting: deeper .gitignore overrides parent
-T["test_merge_depth_priority"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "*.log" },          prefix = "src/" },
-        { patterns = { "!important.log" }, prefix = "" },
-    })
-    -- Entry with prefix="" has 0 slashes, prefix="src/" has 1
-    -- So "" is lower priority (first), "src/" is higher priority (last)
-    -- *.log from src/ overrides !important.log from root
-    lt.assertTrue(matcher:match("src/important.log", false))
-    lt.assertTrue(matcher:match("src/other.log", false))
-end
-
--- Three levels of hierarchy
-T["test_merge_three_levels"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "*.tmp" },     prefix = "" },
-        { patterns = { "!keep.tmp" }, prefix = "src/" },
-        { patterns = { "keep.tmp" },  prefix = "src/core/" },
-    })
-    lt.assertTrue(matcher:match("foo.tmp", false))
-    lt.assertFalse(matcher:match("src/keep.tmp", false))
-    lt.assertTrue(matcher:match("src/core/keep.tmp", false))
-end
-
--- Unanchored patterns with prefix are scoped to that directory tree
-T["test_merge_unanchored_with_prefix"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "*.o" }, prefix = "src/" },
-    })
-    -- *.o with prefix="src/" becomes src/**/*.o — only matches under src/
-    lt.assertFalse(matcher:match("foo.o", false))
-    lt.assertTrue(matcher:match("src/foo.o", false))
-    lt.assertTrue(matcher:match("src/sub/foo.o", false))
-    lt.assertFalse(matcher:match("other/foo.o", false))
-end
-
--- Dir pattern with prefix
-T["test_merge_dir_pattern_prefix"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "build/" }, prefix = "src/" },
-    })
-    -- build/ with prefix="src/" only matches under src/
-    lt.assertFalse(matcher:match("build", true))
-    lt.assertTrue(matcher:match("src/build", true))
-    lt.assertTrue(matcher:match("src/sub/build", true))
-    -- With anchored dir: /output/ with prefix src/
-    local matcher2 = gitignore.merge({
-        { patterns = { "/output/" }, prefix = "src/" },
-    })
-    lt.assertFalse(matcher2:match("output", true))
-    lt.assertTrue(matcher2:match("src/output", true))
-end
-
--- m.merge with path loading
-T["test_merge_with_path"] = function(self)
-    local tmpfile = os.tmpname()
-    write_file(tmpfile, "*.log\n!important.log\n")
-    local matcher = gitignore.merge({
-        { patterns = { "*.tmp" }, prefix = "" },
-        { path = tmpfile,         prefix = "src/" },
-    })
-    lt.assertTrue(matcher:match("foo.tmp", false))
-    lt.assertTrue(matcher:match("src/debug.log", false))
-    lt.assertFalse(matcher:match("src/important.log", false))
-    os.remove(tmpfile)
-end
-
--- m.merge with both path and patterns in same entry
-T["test_merge_path_and_patterns"] = function(self)
-    local tmpfile = os.tmpname()
-    write_file(tmpfile, "*.log\n")
-    local matcher = gitignore.merge({
-        { path = tmpfile, patterns = { "!keep.log" }, prefix = "src/" },
-    })
-    lt.assertTrue(matcher:match("src/debug.log", false))
-    lt.assertFalse(matcher:match("src/keep.log", false))
-    os.remove(tmpfile)
-end
-
--- m.merge with empty prefix (same as m.new)
-T["test_merge_empty_prefix"] = function(self)
-    local matcher = gitignore.merge({
-        { patterns = { "*.o", "!keep.o" }, prefix = "" },
-    })
-    lt.assertTrue(matcher:match("foo.o", false))
-    lt.assertFalse(matcher:match("keep.o", false))
-end
-
 -- matcher:push / matcher:pop
 T["test_push_pop_basic"] = function(self)
     local matcher = gitignore.new({ "*.log" })
@@ -326,6 +207,72 @@ T["test_push_pop_nested"] = function(self)
     lt.assertTrue(matcher:match("a.tmp", false))
 end
 
+T["test_compile_basic"] = function(self)
+    local matcher = gitignore.new({ "*.o", "!keep.o", "build/" })
+    local match_fn = matcher:compile("")
+    lt.assertTrue(match_fn("foo.o", "foo.o", false))
+    lt.assertFalse(match_fn("keep.o", "keep.o", false))
+    lt.assertFalse(match_fn("main.c", "main.c", false))
+    -- 目录模式
+    lt.assertTrue(match_fn("build", "build", true))
+    lt.assertFalse(match_fn("build", "build", false))
+end
+
+T["test_compile_with_prefix"] = function(self)
+    local matcher = gitignore.new({ "*.tmp" })
+    matcher:push({ "!keep.tmp" }, "src/")
+    -- compile 空 prefix（根目录）
+    local match_root = matcher:compile("")
+    lt.assertTrue(match_root("a.tmp", "a.tmp", false))
+    lt.assertTrue(match_root("src/b.tmp", "b.tmp", false))
+    -- compile src/ prefix
+    local match_src = matcher:compile("src/")
+    lt.assertFalse(match_src("src/keep.tmp", "keep.tmp", false))
+    lt.assertTrue(match_src("src/a.tmp", "a.tmp", false))
+    lt.assertTrue(match_src("keep.tmp", "keep.tmp", false))
+end
+
+T["test_compile_with_push_pop"] = function(self)
+    local matcher = gitignore.new({ "*.log" })
+    local fn1 = matcher:compile("")
+    lt.assertTrue(fn1("error.log", "error.log", false))
+    -- push 后重新 compile
+    matcher:push({ "!debug.log" }, "src/")
+    local fn2 = matcher:compile("src/")
+    lt.assertFalse(fn2("src/debug.log", "debug.log", false))
+    lt.assertTrue(fn2("src/error.log", "error.log", false))
+    -- pop 后 compile 结果应还原
+    matcher:pop()
+    local fn3 = matcher:compile("src/")
+    lt.assertTrue(fn3("src/debug.log", "debug.log", false))
+end
+
+T["test_compile_cache"] = function(self)
+    local matcher = gitignore.new({ "*.o" })
+    local fn1 = matcher:compile("src/")
+    local fn2 = matcher:compile("src/")
+    lt.assertEquals(fn1, fn2)
+    -- push 后缓存应失效
+    matcher:push({ "!debug.o" }, "src/")
+    local fn3 = matcher:compile("src/")
+    lt.assertTrue(fn1 ~= fn3)
+end
+
+T["test_edge_cases"] = function(self)
+    local matcher = gitignore.new({ "*.o", "/root.o", "build/" })
+    -- 空路径
+    lt.assertFalse(matcher:match("", false))
+    -- 路径以 / 开头（anchored 模式从根匹配，同时 unanchored 也匹配 basename）
+    lt.assertTrue(matcher:match("/root.o", false))
+    -- 连续 / 被规范化
+    lt.assertTrue(matcher:match("build//file", false))  -- build/ 被忽略，子项也被忽略
+    -- 空 push/pop
+    matcher:push({}, "empty/")
+    lt.assertFalse(matcher:match("empty/file", false))
+    matcher:pop()
+    -- pop 后行为还原
+    lt.assertFalse(matcher:match("empty/file", false))
+end
 
 local exitcode = lt.run()
 cleanup_git_repo()

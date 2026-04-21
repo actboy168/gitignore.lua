@@ -188,7 +188,7 @@ local NEVER_MATCH = { type = "never" }
 
 local function parse_line(line, prefix)
     -- Step 1: skip blank lines
-    if line == "" or line:match("^%s*$") then
+    if line:match("^%s*$") then
         return nil
     end
 
@@ -336,11 +336,28 @@ local function match_tokens(tokens, tpos, text, spos, ignore_case)
             end
             -- Try matching one or more characters (including /)
             local try_pos = spos
-            while try_pos <= #text do
-                if match_tokens(tokens, tpos + 1, text, try_pos + 1, ignore_case) then
-                    return true
+            -- 仅当 doublestar 后紧跟 literal 时做跳跃优化
+            local next_tok = tokens[tpos + 1]
+            if next_tok and next_tok.type == "literal" then
+                local search = next_tok.char
+                if ignore_case then search = search:lower() end
+                while try_pos <= #text do
+                    local tc = text:sub(try_pos, try_pos)
+                    if ignore_case then tc = tc:lower() end
+                    if tc == search then
+                        if match_tokens(tokens, tpos + 1, text, try_pos, ignore_case) then
+                            return true
+                        end
+                    end
+                    try_pos = try_pos + 1
                 end
-                try_pos = try_pos + 1
+            else
+                while try_pos <= #text do
+                    if match_tokens(tokens, tpos + 1, text, try_pos + 1, ignore_case) then
+                        return true
+                    end
+                    try_pos = try_pos + 1
+                end
             end
             return false
 
@@ -456,6 +473,39 @@ local function evaluate_patterns(patterns, path, basename, is_dir, ignore_case, 
 end
 
 ---------------------------------------------------------------------------
+-- Shared tree traversal
+---------------------------------------------------------------------------
+
+-- 从 root 出发，沿 seg_iter 遍历树，收集沿途所有节点的 patterns
+-- level_ends 为可选参数，若提供则记录每层结束时的 relevant 长度
+local function _collect_relevant_patterns(root, seg_iter, level_ends)
+    local relevant = {}
+    for _, pat in ipairs(root.patterns) do
+        relevant[#relevant + 1] = pat
+    end
+    if level_ends then
+        level_ends[0] = #relevant
+    end
+    local node = root
+    local level = 0
+    for seg in seg_iter do
+        level = level + 1
+        if node then
+            node = node.children[seg]
+        end
+        if node then
+            for _, pat in ipairs(node.patterns) do
+                relevant[#relevant + 1] = pat
+            end
+        end
+        if level_ends then
+            level_ends[level] = #relevant
+        end
+    end
+    return relevant
+end
+
+---------------------------------------------------------------------------
 -- Tree node
 ---------------------------------------------------------------------------
 
@@ -481,33 +531,15 @@ function matcher_mt:match(path, is_dir)
     local basename = path:match("([^/]+)$") or path
 
     -- 收集路径上所有节点的 patterns
-    local relevant = {}
     local level_ends = {}
-
-    local node = self.root
-    local level = 0
-    for _, pat in ipairs(node.patterns) do
-        relevant[#relevant + 1] = pat
-    end
-    level_ends[level] = #relevant
-
     local pos = 1
-    while true do
+    local relevant = _collect_relevant_patterns(self.root, function()
         local slash = path:find("/", pos, true)
-        if not slash then break end
+        if not slash then return nil end
         local name = path:sub(pos, slash - 1)
-        if node then
-            node = node.children[name]
-        end
-        level = level + 1
-        if node then
-            for _, pat in ipairs(node.patterns) do
-                relevant[#relevant + 1] = pat
-            end
-        end
-        level_ends[level] = #relevant
         pos = slash + 1
-    end
+        return name
+    end, level_ends)
 
     -- Check if any ancestor directory is excluded
     -- If so, the path is ignored regardless of negation patterns
@@ -581,31 +613,11 @@ end
 function matcher_mt:compile(prefix)
     prefix = prefix or ""
 
-    local cache = self._compile_cache
-    if not cache then
-        cache = {}
-        self._compile_cache = cache
-    end
-    local cached = cache[prefix]
+    local cached = self._compile_cache[prefix]
     if cached then return cached end
 
     -- 收集到 prefix 为止的所有 patterns
-    local relevant = {}
-    local node = self.root
-    for _, pat in ipairs(node.patterns) do
-        relevant[#relevant + 1] = pat
-    end
-
-    if prefix ~= "" then
-        for part in prefix:gmatch("([^/]+)") do
-            node = node and node.children[part]
-            if node then
-                for _, pat in ipairs(node.patterns) do
-                    relevant[#relevant + 1] = pat
-                end
-            end
-        end
-    end
+    local relevant = _collect_relevant_patterns(self.root, prefix:gmatch("([^/]+)"))
 
     -- 按 literal_prefix 进一步过滤：只保留与当前 prefix 可能相关的 anchored patterns
     local filtered = {}
@@ -633,7 +645,7 @@ function matcher_mt:compile(prefix)
         end
         return false
     end
-    cache[prefix] = match_fn
+    self._compile_cache[prefix] = match_fn
     return match_fn
 end
 
@@ -648,60 +660,10 @@ function m.new(patterns, opts)
         ignore_case = opts.ignore_case or false,
         _parent_cache = {},
         _push_stack = {},
+        _compile_cache = {},
     }, matcher_mt)
 
     self:push(patterns, "")
-    return self
-end
-
----------------------------------------------------------------------------
--- Hierarchical .gitignore merging
----------------------------------------------------------------------------
-
-local function count_slashes(s)
-    local n = 0
-    for _ in s:gmatch("/") do n = n + 1 end
-    return n
-end
-
-function m.merge(entries, opts)
-    opts = opts or {}
-
-    -- Sort by prefix depth (shallow first = lower priority, deep last = higher priority)
-    local sorted = {}
-    for i, entry in ipairs(entries) do
-        sorted[i] = entry
-    end
-    table.sort(sorted, function(a, b)
-        return count_slashes(a.prefix or "") < count_slashes(b.prefix or "")
-    end)
-
-    local self = m.new({}, opts)
-
-    for _, entry in ipairs(sorted) do
-        local prefix = entry.prefix or ""
-        local lines = entry.patterns or {}
-
-        -- Load from file if path specified
-        if entry.path then
-            local f = io.open(entry.path, "r")
-            if f then
-                local file_lines = {}
-                for line in f:lines() do
-                    file_lines[#file_lines + 1] = line
-                end
-                f:close()
-                -- Merge file lines with explicit patterns (file first, then explicit)
-                for _, l in ipairs(lines) do
-                    file_lines[#file_lines + 1] = l
-                end
-                lines = file_lines
-            end
-        end
-
-        self:push(lines, prefix)
-    end
-
     return self
 end
 

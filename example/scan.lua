@@ -40,31 +40,15 @@ end
 -- 迭代器工具
 ---------------------------------------------------------------------------
 
--- 将 fs.pairs 返回值打包为表
+-- 将 fs.pairs 返回值打包为表（标准三元组迭代器）
 local function make_iter(dir)
-    local next_fn, state, ctrl = fs.pairs(dir)
-    return { next_fn, state, ctrl }
+    return { fs.pairs(dir) }
 end
 
 local function iter_next(iter)
     local path, status = iter[1](iter[2], iter[3])
     if path then iter[3] = path end
     return path, status
-end
-
----------------------------------------------------------------------------
--- 读取 .gitignore 文件内容
----------------------------------------------------------------------------
-
-local function read_gitignore(path)
-    local f = io.open(path, "r")
-    if not f then return {} end
-    local lines = {}
-    for line in f:lines() do
-        lines[#lines + 1] = line
-    end
-    f:close()
-    return lines
 end
 
 ---------------------------------------------------------------------------
@@ -86,13 +70,15 @@ local function scan(repo_root)
     -- 每个栈元素: { iter, rel_prefix }
     local stack = {}
     local function push_dir(dir, rel_prefix)
-        -- 进入目录时，先检查并加载该目录的 .gitignore
+        -- 进入目录时，加载该目录的 .gitignore（如存在）
+        local gitignore_path = (dir / ".gitignore"):string()
+        local f = io.open(gitignore_path, "r")
         local lines = {}
-        local gitignore_path = dir / ".gitignore"
-        local fh = io.open(gitignore_path:string(), "r")
-        if fh then
-            fh:close()
-            lines = read_gitignore(gitignore_path:string())
+        if f then
+            for line in f:lines() do
+                lines[#lines + 1] = line
+            end
+            f:close()
         end
         matcher:push(lines, rel_prefix)
         match_fn = matcher:compile(rel_prefix)
@@ -178,39 +164,20 @@ local function check_with_git(root)
     local total = 0
     for _ in pairs(scan_set) do total = total + 1 end
     local only_scan = {}
-    local only_git = {}
     for path in pairs(scan_set) do
         if not git_set[path] then
             only_scan[#only_scan + 1] = path
         end
     end
-    for path in pairs(git_set) do
-        if not scan_set[path] then
-            -- 跳过磁盘上不存在的文件（已删除但仍 tracked）
-            if fs.exists(root_path / path) then
-                -- 磁盘存在但 scan 未输出，说明被 gitignore 规则忽略
-                --（可能是被强制跟踪的文件），不视为差异
-            end
-        end
-    end
     table.sort(only_scan)
-    table.sort(only_git)
 
     -- 4. 输出结果
-    if #only_scan == 0 and #only_git == 0 then
+    if #only_scan == 0 then
         print("OK: 结果与 git ls-files 一致 (" .. total .. " 个文件)")
     else
-        if #only_scan > 0 then
-            print("scan 有但 git 没有 (" .. #only_scan .. " 个):")
-            for _, p in ipairs(only_scan) do
-                print("  + " .. p)
-            end
-        end
-        if #only_git > 0 then
-            print("git 有但 scan 没有 (" .. #only_git .. " 个):")
-            for _, p in ipairs(only_git) do
-                print("  - " .. p)
-            end
+        print("scan 有但 git 没有 (" .. #only_scan .. " 个):")
+        for _, p in ipairs(only_scan) do
+            print("  + " .. p)
         end
     end
 end

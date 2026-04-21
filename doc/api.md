@@ -38,43 +38,6 @@ local matcher = gitignore.new({
 local matcher_ci = gitignore.new({ "Foo" }, { ignore_case = true })
 ```
 
-### gitignore.merge(entries, opts)
-
-从多层 `.gitignore` 创建匹配器，支持层级优先级。与 git 的行为一致：更深层目录的 `.gitignore` 优先级更高。
-
-**参数：**
-
-- `entries` (`table`): 层级条目列表，每个条目为包含以下字段的表：
-  - `patterns` (`table|nil`): 模式字符串列表
-  - `path` (`string|nil`): `.gitignore` 文件路径（可与 `patterns` 同时使用，文件内容在前）
-  - `prefix` (`string`): 该 `.gitignore` 相对于仓库根目录的路径前缀（如 `"src/"`），根目录用 `""`
-- `opts` (`table|nil`): 选项表，同 `gitignore.new`
-
-**返回：**
-
-- 匹配器对象 (`matcher`)
-
-**优先级规则：**
-
-- 条目按 `prefix` 深度自动排序（浅的在前 = 低优先级，深的在后 = 高优先级）
-- 锚定模式（含 `/`）自动加上 `prefix` 前缀，使其相对于自身目录
-- 非锚定模式自动转换为 `prefix + "**/" + pattern`，限制在该目录树下生效
-
-**示例：**
-
-```lua
--- 模拟 git 多层 .gitignore
-local matcher = gitignore.merge({
-    { patterns = { "*.o", "build/" }, prefix = "" },           -- 根目录
-    { patterns = { "!debug.o" }, prefix = "src/" },            -- src/ 目录
-    { path = "src/core/.gitignore", prefix = "src/core/" },    -- src/core/ 目录
-})
-
-matcher:match("foo.o", false)             -- true  （根目录 *.o）
-matcher:match("src/debug.o", false)       -- false （src/ 的 !debug.o 取反）
-matcher:match("src/build", true)          -- true  （根目录 build/）
-```
-
 ### matcher:match(path, is_dir)
 
 判断路径是否被忽略。
@@ -108,7 +71,7 @@ matcher:match("src/main.c", false)   -- false （不匹配任何规则）
 **参数（push）：**
 
 - `lines` (`table`): `.gitignore` 模式字符串列表
-- `prefix` (`string|nil`): 路径前缀，同 `gitignore.merge` 中的 `prefix` 字段，默认 `""`
+- `prefix` (`string|nil`): 路径前缀，表示该 `.gitignore` 文件所在的目录（如 `"src/"`），默认 `""`
 
 **示例：**
 
