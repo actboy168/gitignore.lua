@@ -396,6 +396,17 @@ end
 ---------------------------------------------------------------------------
 
 local function build_match_fn(tokens, anchored, dir_only)
+    -- 提取开头的 literal 前缀，用于快速跳过不匹配的项
+    local prefix_chars = {}
+    for i = 1, #tokens do
+        if tokens[i].type == "literal" then
+            prefix_chars[#prefix_chars + 1] = tokens[i].char
+        else
+            break
+        end
+    end
+    local prefix = table.concat(prefix_chars)
+
     return function(path, basename, is_dir, ignore_case)
         if dir_only and not is_dir then
             return false
@@ -408,26 +419,54 @@ local function build_match_fn(tokens, anchored, dir_only)
             text = basename
         end
 
+        -- 前缀快速跳过
+        if #prefix > 0 then
+            if #text < #prefix then
+                return false
+            end
+            if ignore_case then
+                if text:sub(1, #prefix):lower() ~= prefix:lower() then
+                    return false
+                end
+            else
+                if text:sub(1, #prefix) ~= prefix then
+                    return false
+                end
+            end
+        end
+
         return match_tokens(tokens, 1, text, 1, ignore_case)
-    end
+    end, prefix
 end
 
 ---------------------------------------------------------------------------
 -- Matcher object
 ---------------------------------------------------------------------------
 
-local function evaluate_patterns(patterns, path, basename, is_dir, ignore_case)
-    local result = false
-    for _, pat in ipairs(patterns) do
+local function evaluate_patterns(patterns, path, basename, is_dir, ignore_case, end_idx)
+    -- 从后往前遍历，第一个匹配的 pattern 决定结果（gitignore 语义：后面的覆盖前面的）
+    end_idx = end_idx or #patterns
+    for i = end_idx, 1, -1 do
+        local pat = patterns[i]
         if pat.match_fn(path, basename, is_dir, ignore_case) then
-            if pat.negate then
-                result = false
-            else
-                result = true
-            end
+            return not pat.negate
         end
     end
-    return result
+    return false
+end
+
+---------------------------------------------------------------------------
+-- Tree node
+---------------------------------------------------------------------------
+
+local node_mt = {}
+node_mt.__index = node_mt
+
+function node_mt:new()
+    return setmetatable({
+        patterns = {},
+        children = {},
+    }, node_mt)
 end
 
 local matcher_mt = {}
@@ -441,65 +480,161 @@ function matcher_mt:match(path, is_dir)
 
     local basename = path:match("([^/]+)$") or path
 
+    -- 收集路径上所有节点的 patterns
+    local relevant = {}
+    local level_ends = {}
+
+    local node = self.root
+    local level = 0
+    for _, pat in ipairs(node.patterns) do
+        relevant[#relevant + 1] = pat
+    end
+    level_ends[level] = #relevant
+
+    local pos = 1
+    while true do
+        local slash = path:find("/", pos, true)
+        if not slash then break end
+        local name = path:sub(pos, slash - 1)
+        if node then
+            node = node.children[name]
+        end
+        level = level + 1
+        if node then
+            for _, pat in ipairs(node.patterns) do
+                relevant[#relevant + 1] = pat
+            end
+        end
+        level_ends[level] = #relevant
+        pos = slash + 1
+    end
+
     -- Check if any ancestor directory is excluded
     -- If so, the path is ignored regardless of negation patterns
-    local parent_excluded = false
-
-    -- Only check parents if path contains /
     if path:find("/", 1, true) then
         local cache = self._parent_cache
-        local pos = 1
+        local ppos = 1
+        local parent_level = 0
         while true do
-            local slash = path:find("/", pos, true)
+            local slash = path:find("/", ppos, true)
             if not slash then break end
             local parent = path:sub(1, slash - 1)
             local cached = cache[parent]
             if cached == nil then
+                parent_level = parent_level + 1
+                local end_idx = level_ends[parent_level] or 0
                 local parent_basename = parent:match("([^/]+)$") or parent
-                cached = evaluate_patterns(self.patterns, parent, parent_basename, true, self.ignore_case)
+                cached = evaluate_patterns(relevant, parent, parent_basename, true, self.ignore_case, end_idx)
                 cache[parent] = cached
             end
             if cached then
-                parent_excluded = true
-                break
+                return true
             end
-            pos = slash + 1
+            ppos = slash + 1
         end
     end
 
-    if parent_excluded then
-        return true
-    end
-
-    return evaluate_patterns(self.patterns, path, basename, is_dir, self.ignore_case)
+    return evaluate_patterns(relevant, path, basename, is_dir, self.ignore_case)
 end
 
 function matcher_mt:push(lines, prefix)
-    local stack = self._push_stack
-    if not stack then
-        stack = {}
-        self._push_stack = stack
-    end
-    stack[#stack + 1] = #self.patterns
     prefix = prefix or ""
+
+    -- 沿 prefix 走到对应节点
+    local node = self.root
+    if prefix ~= "" then
+        for part in prefix:gmatch("([^/]+)") do
+            local child = node.children[part]
+            if not child then
+                child = node_mt:new()
+                node.children[part] = child
+            end
+            node = child
+        end
+    end
+
+    local stack = self._push_stack
+    stack[#stack + 1] = { node = node, count = #node.patterns }
+
     for _, line in ipairs(lines) do
         local pat = parse_line(line, prefix)
         if pat ~= nil and pat.type ~= "never" then
-            pat.match_fn = build_match_fn(pat.tokens, pat.anchored, pat.dir_only)
-            self.patterns[#self.patterns + 1] = pat
+            pat.match_fn, pat.literal_prefix = build_match_fn(pat.tokens, pat.anchored, pat.dir_only)
+            node.patterns[#node.patterns + 1] = pat
         end
     end
     self._parent_cache = {}
+    self._compile_cache = {}
 end
 
 function matcher_mt:pop()
     local stack = self._push_stack
-    local save = stack[#stack]
+    local frame = stack[#stack]
     stack[#stack] = nil
-    while #self.patterns > save do
-        self.patterns[#self.patterns] = nil
+    while #frame.node.patterns > frame.count do
+        frame.node.patterns[#frame.node.patterns] = nil
     end
     self._parent_cache = {}
+    self._compile_cache = {}
+end
+
+function matcher_mt:compile(prefix)
+    prefix = prefix or ""
+
+    local cache = self._compile_cache
+    if not cache then
+        cache = {}
+        self._compile_cache = cache
+    end
+    local cached = cache[prefix]
+    if cached then return cached end
+
+    -- 收集到 prefix 为止的所有 patterns
+    local relevant = {}
+    local node = self.root
+    for _, pat in ipairs(node.patterns) do
+        relevant[#relevant + 1] = pat
+    end
+
+    if prefix ~= "" then
+        for part in prefix:gmatch("([^/]+)") do
+            node = node and node.children[part]
+            if node then
+                for _, pat in ipairs(node.patterns) do
+                    relevant[#relevant + 1] = pat
+                end
+            end
+        end
+    end
+
+    -- 按 literal_prefix 进一步过滤：只保留与当前 prefix 可能相关的 anchored patterns
+    local filtered = {}
+    for _, pat in ipairs(relevant) do
+        if not pat.anchored then
+            filtered[#filtered + 1] = pat
+        else
+            local lp = pat.literal_prefix or ""
+            if #lp == 0
+                or lp:sub(1, #prefix) == prefix
+                or prefix:sub(1, #lp) == lp
+            then
+                filtered[#filtered + 1] = pat
+            end
+        end
+    end
+
+    local ignore_case = self.ignore_case
+    local match_fn = function(path, basename, is_dir)
+        for i = #filtered, 1, -1 do
+            local pat = filtered[i]
+            if pat.match_fn(path, basename, is_dir, ignore_case) then
+                return not pat.negate
+            end
+        end
+        return false
+    end
+    cache[prefix] = match_fn
+    return match_fn
 end
 
 ---------------------------------------------------------------------------
@@ -509,19 +644,13 @@ end
 function m.new(patterns, opts)
     opts = opts or {}
     local self = setmetatable({
-        patterns = {},
+        root = node_mt:new(),
         ignore_case = opts.ignore_case or false,
         _parent_cache = {},
+        _push_stack = {},
     }, matcher_mt)
 
-    for _, line in ipairs(patterns) do
-        local pat = parse_line(line)
-        if pat ~= nil and pat.type ~= "never" then
-            pat.match_fn = build_match_fn(pat.tokens, pat.anchored, pat.dir_only)
-            self.patterns[#self.patterns + 1] = pat
-        end
-    end
-
+    self:push(patterns, "")
     return self
 end
 

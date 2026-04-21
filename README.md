@@ -50,6 +50,7 @@ matcher:match("foo", false)          -- true
 | `matcher:match(path, is_dir)` | 判断路径是否被忽略 |
 | `matcher:push(lines, prefix)` | 动态追加规则（栈式） |
 | `matcher:pop()` | 还原上次 push 的规则 |
+| `matcher:compile(prefix)` | 为指定目录预编译高效匹配函数 |
 
 **选项：**
 

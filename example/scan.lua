@@ -80,6 +80,7 @@ local function scan(repo_root)
 
     -- 用 push/pop API 动态管理各层 .gitignore 规则
     local matcher = gitignore.new({})
+    local match_fn = matcher:compile("")
 
     -- 栈式迭代器
     -- 每个栈元素: { iter, rel_prefix }
@@ -94,6 +95,7 @@ local function scan(repo_root)
             lines = read_gitignore(gitignore_path:string())
         end
         matcher:push(lines, rel_prefix)
+        match_fn = matcher:compile(rel_prefix)
         stack[#stack + 1] = { make_iter(dir), rel_prefix }
     end
     push_dir(fs.path(root_str), "")
@@ -107,13 +109,17 @@ local function scan(repo_root)
                 -- 退出目录，还原 matcher 规则
                 matcher:pop()
                 stack[#stack] = nil
+                if #stack > 0 then
+                    match_fn = matcher:compile(stack[#stack][2])
+                end
             else
                 local name = path:filename():string()
                 if name == ".git" then goto continue end
                 local rel = rel_prefix .. normalize_sep(name)
                 if submodules[rel] then goto continue end
                 local is_dir = status and status:is_directory()
-                if matcher:match(rel, is_dir) then
+                local basename = rel:match("([^/]+)$") or rel
+                if match_fn(rel, basename, is_dir) then
                     goto continue -- ignored
                 end
                 if is_dir then

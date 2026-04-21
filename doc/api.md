@@ -126,6 +126,37 @@ matcher:pop()
 matcher:match("src/debug.o", false)   -- true（还原后取反规则不再生效）
 ```
 
+### matcher:compile(prefix)
+
+为指定目录前缀预编译一个高效的局部匹配函数。适用于遍历目录树时批量判断同一目录下多个文件的场景。
+
+`compile` 会根据 `prefix` 从树中收集相关规则，并过滤掉明显不可能匹配的 anchored patterns（利用 `literal_prefix` 快速筛选），返回一个只做 pattern 匹配的轻量函数。结果会被缓存，同一 prefix 重复调用时直接返回缓存。
+
+**参数：**
+
+- `prefix` (`string|nil`): 当前遍历的目录前缀（如 `"src/core/"`），默认 `""`
+
+**返回：**
+
+- 局部匹配函数 `function(path, basename, is_dir)`，语义同 `matcher:match`，但不检查父目录是否被排除（适合 scan 等已保证父目录未被忽略的场景）
+
+**示例：**
+
+```lua
+local matcher = gitignore.new({ "*.o", "!keep.o" })
+
+-- 预编译根目录匹配函数
+local match_fn = matcher:compile("")
+match_fn("foo.o", "foo.o", false)     -- true
+match_fn("keep.o", "keep.o", false)   -- false（取反）
+
+-- 进入 src/ 后预编译该目录的匹配函数
+matcher:push({ "!debug.o" }, "src/")
+local match_src = matcher:compile("src/")
+match_src("src/debug.o", "debug.o", false)  -- false（src/ 取反生效）
+match_src("src/main.o", "main.o", false)    -- true
+```
+
 ## 匹配规则
 
 详细规则说明见 [doc/spec.md](spec.md)。以下为简要总结：
