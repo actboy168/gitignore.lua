@@ -509,14 +509,8 @@ end
 -- Tree node
 ---------------------------------------------------------------------------
 
-local node_mt = {}
-node_mt.__index = node_mt
-
-function node_mt:new()
-    return setmetatable({
-        patterns = {},
-        children = {},
-    }, node_mt)
+local function new_node()
+    return { patterns = {}, children = {} }
 end
 
 local matcher_mt = {}
@@ -578,7 +572,7 @@ function matcher_mt:push(lines, prefix)
         for part in prefix:gmatch("([^/]+)") do
             local child = node.children[part]
             if not child then
-                child = node_mt:new()
+                child = new_node()
                 node.children[part] = child
             end
             node = child
@@ -656,7 +650,7 @@ end
 function m.new(patterns, opts)
     opts = opts or {}
     local self = setmetatable({
-        root = node_mt:new(),
+        root = new_node(),
         ignore_case = opts.ignore_case or false,
         _parent_cache = {},
         _push_stack = {},
